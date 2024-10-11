@@ -1,0 +1,533 @@
+---
+title: "rove"
+author: "Duncan T. Wilson"
+format: html
+---
+
+## Robust, value-based sample size determination for clinical trials when nuisance parameters are unknown
+
+
+## Problem
+
+Consider a two-arm trial with a normal endpoint which will compare the means in each group via a t-test. Denote the variance of the endpoint (common across arms) by $\sigma^2$, and the target difference under the alternative hypothesis (which the trial will be powered to detect) by $\delta_a$. Let the sample size in each arm of the trial be denoted by $n$. Our problem is to define the optimal choice of $n$.
+
+## Methods
+
+Our basic proposal is to define a function which quantifies the benefit of a given choice of $n$ and offsets this against the costs of sampling and setup. We'll refer to this as a _value function_, to be distinguished from a utility function in that it can only be applied when all the inputs are known (i.e. it reflects preferences under certainty). We propose two value functions:
+
+$$
+\begin{align}
+v_1(n, \sigma; \lambda_1, c_1) & = \underbrace{1 - \Phi\left(z_{1 - \alpha} - \frac{\delta_a}{\sqrt{2\sigma^2/n}}\right)}_\textrm{Power} - \lambda_1 n - c_1 \\
+v_2(n, \sigma; \lambda_2, c_2) & = \underbrace{\sqrt{\frac{n}{2\sigma^2}}}_\textrm{Precision} - \lambda_2 n - c_2.
+\end{align}
+$$
+
+Each value function has a benefit component (the power of the trial and the sampling precision of the estimated mean difference, respectively) offset by a cost component (a multiple of the sample size and a fixed setup cost in each case). These value functions imply a constant trade-off between the sample size of the trial and its power/precision, with the rate given by the parameters $\lambda_1$ and $\lambda_2$. They also include fixed set-up costs, $c_1$ and $c_2$. Note that we distinguish the arguments between those which reflect the model (in this case, $n$ and $\sigma$) and those which are parameters of the value function ($\lambda$ and $c$).
+
+## Illustration
+
+Consider the case where the MCID is  $\delta_a = 0.3$ and we fix the (one-sided) type I error rate at $\alpha = 0.025$. We suppose we have a point estimate of $\sigma = 1$ which was derived from some pilot trial data with 30 patients in each arm. Hard-coding these into the value functions gives
+
+```{r}
+v1 <- function(n, sig, lambda1, c1) {
+  # Power based value function
+  1-pt(qt(0.975, 2*(n-1)), 2*(n-1), 0.3/sqrt(2*sig^2/n)) - lambda1*n - c1
+}
+
+v2 <- function(n, sig, lambda2, c2) {
+  # Precision based value function
+  sqrt(n/(2*sig^2)) - lambda2*n - c2
+}
+```
+
+We choose two values for each of $\lambda_1$ and $\lambda_2$, representing sampling costs. These are chosen to give, for their respective value functions, locally optimal sample sizes of 176 and 110 when $\sigma = 1$ (representing powers of 0.8 and 0.6 respectively). We then choose the setup cost parameters $c_1$ and $c_2$ to be equivalent to sampling 15 participants (per arm).
+
+```{r}
+# Define some example trade-offs
+lambda1 <- c(0.00224, 0.00392); lambda2 <- c(0.02668, 0.0337)
+
+# Take a common fixed cost in units of sample size
+n_cost <- 15
+c1 <- lambda1*n_cost; c2 <- lambda2*n_cost
+```
+
+To illustrate these scenarios, we plot power and precision functions for $\sigma = 1$ and $\sigma = 1.3$ along with the value function contours, and highlight the locally optimal sample size in each case and the interval method sample size.
+
+```{r}
+plots <- vector("list", 4)
+for(i in 1:4){
+  lambda <- c(lambda1, lambda2)[i]
+  C <- c(c1, c2)[i]
+  
+  df <- data.frame(n=seq(4,500,1))
+  df <- rbind(df, df)
+  df$sig <- c(rep(1, nrow(df)/2), rep(1.3*1, nrow(df)/2))
+  if(i < 3){
+    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
+  } else {
+    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = C)
+  }
+  df$p <- df$v + lambda*df$n + C
+  
+  opt1 <- df[which.max(df$v*(df$sig == 1)),]
+  opt2 <- df[which.max(df$v*(df$sig == 1.3)),]
+  
+  gr <- expand.grid(n = seq(4, 500, l = 10),
+                    p = seq(min(df$p), max(df$p), l = 10))
+  gr$v <- gr$p - lambda*gr$n - C
+  
+  plots[[i]] <- ggplot(df, aes(n, p)) + geom_line(aes(colour=as.factor(sig))) +
+    #geom_hline(yintercept = 0.8, linetype=2) +
+    geom_contour(data = gr, aes(z = v), alpha = 0.5, colour = cols[3]) +
+    geom_contour(data = gr, aes(z = v), breaks = c(C), colour = cols[4]) +
+    geom_point(data = df[as.numeric(row.names(rbind(opt1, opt2))), ]) +
+    xlab("Sample size") +
+    scale_colour_manual(values=cols[1:2], labels=round(c(1, 1.3), 2)) +
+    labs(colour = "SD") +
+    theme_minimal()
+  
+  if(i < 3){
+    plots[[i]] <- plots[[i]] + ylab("Power")
+  } else {
+    plots[[i]] <- plots[[i]] + ylab("Precision")
+  }
+}
+
+
+p1 <- (plots[[1]] + plots[[3]]) /(plots[[2]] + plots[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p1
+
+#ggsave("./figures/example_1_app.pdf", width = 18, height = 14, units="cm")
+
+plots[[1]]
+
+#ggsave("./figures/example_1.pdf", width = 14, height = 9, units="cm")
+```
+
+To further explore the relationship between SD and sample size we can plot the latter as a function of the former, with the official method as a comparator.
+
+```{r}
+mm_reg_n <- function(sig, lambda, c, i) {
+  n <- seq(4,900,1)
+  if(i < 3){
+    v <- v1(n = n, sig = sig, lambda1 = lambda, c1 = c)
+  } else {
+    v <- v2(n = n, sig = sig, lambda2 = lambda, c2 = c)
+  }
+  if(max(v) > 0) {
+    n[which.max(v)]
+  } else {
+    0
+  }
+}
+
+off_n <- function(sig, eff = 0.3, pow) {
+  n <- seq(4,1300,1)
+  p <- 1-pt(qt(0.975, 2*(n-1)), 2*(n-1), eff/sqrt(2*sig^2/n))
+  n[p >= pow][1]
+}
+
+plots <- vector("list", 4)
+for(i in 1:4){
+  lambda <- c(lambda1, lambda2)[i]
+  c <- c(c1, c2)[i]
+  pow_nom <- 0.8*(i == 1 | i == 3) + 0.6*(i == 2 | i == 4)
+  
+  df <- data.frame(sig = seq(0.5, 2, 0.01))
+  
+  df$n_opt <- sapply(df$sig, mm_reg_n, lambda=lambda, c=c, i=i)
+  df$n_off <- sapply(df$sig, off_n, pow = pow_nom)
+  
+  df <- melt(df, id.vars = "sig")
+  names(df)[2:3] <- c("m", "n")
+
+  plots[[i]] <- ggplot(df, aes(sig, n, colour = m)) + geom_line() +
+    scale_colour_manual(values=cols[1:2], name = "Method", labels = c("Value-based", "Standard")) +
+    xlab("SD") +
+    theme_minimal()
+}
+
+
+p2 <- (plots[[1]] + plots[[3]]) /(plots[[2]] + plots[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p2
+
+#ggsave("./figures/example_2_app.pdf", width = 18, height = 14, units="cm")
+
+plots[[1]]
+
+#("./figures/example_2.pdf", width = 14, height = 9, units="cm")
+```
+
+We now consider how the value of our fixed sample size varies with the true parameter $\sigma$, in comparison with the value of the locally optimal n. This needs to be done in the context of a specific point estimate and interval for $\sigma$, which recall is 1 and with an interval corresponding to the 95% CI around that point estimate based on a previous trial with two groups of 30 participants.
+
+```{r}
+# First, choose a point estimate and construct a 95% CI around it
+# corresponding to a certain pilot sample size
+sig <- 1; k <- 2*30 - 2
+lo <- sqrt(k*sig^2/qchisq(0.975, k)) 
+up <- sqrt(k*sig^2/qchisq(0.025, k)) 
+
+plots2 <- vector("list", 4)
+for(i in 1:4){
+  lambda <- c(lambda1, lambda2)[i]
+  C <- c(c1, c2)[i]
+  
+  df <- expand.grid(sig = seq(0.6, 1.5, 0.01),
+                    n = 2:500)
+  if(i < 3){
+    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
+  } else {
+    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = C)
+  }
+  
+  df_wide <- reshape(df, idvar = "sig", direction = "wide", timevar = "n", v.names = "v")
+  
+  # Add a n=0 option
+  df_wide <- cbind(df_wide[,1, drop=FALSE], rep(0, nrow(df_wide)), df_wide[, 2:ncol(df_wide)])
+  
+  # Get maximum value at each sigma over set of ns
+  df2 <- df_wide[,1, drop = FALSE]
+  v_opt <- apply(df_wide[,2:ncol(df_wide)], 1, max)
+  
+  # Transform value into regret
+  df_wide_reg <- df_wide
+  df_wide_reg[, 2:ncol(df_wide_reg)] <- v_opt -  df_wide_reg[, 2:ncol(df_wide_reg)]
+  
+  # Get minimax regret n index
+  n_mm_ind <- which.min(apply(df_wide_reg[df_wide_reg$sig > lo & df_wide_reg$sig < up, 2:ncol(df_wide_reg)], 2, max))
+  
+  # Get minimax regret n value at each sigma
+  v_mm <- df_wide[, 1 + n_mm_ind]
+  
+  df <- data.frame(sig = rep(df_wide$sig, 2),
+                    v = c(v_opt, v_mm),
+                    t = c(rep(c("Optimal", "Minimax"), each = length(df_wide$sig))))
+  
+  plots2[[i]] <- ggplot(df, aes(sig, v, colour = t)) + geom_line() +
+    scale_colour_manual(name = "", values = cols[c(1,3)]) +
+    geom_vline(xintercept = c(lo, up), linetype = 2) +
+    ylab("Value") + xlab("Standard deviation") +
+    theme_minimal()
+}
+  
+p2 <- (plots2[[1]] + plots2[[3]]) /(plots2[[2]] + plots2[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p2
+#ggsave("./figures/example_3_app.pdf", p2, width = 18, height = 12, units="cm")
+
+plots2[[1]]
+#ggsave("./figures/example_3.pdf", width = 14, height = 9, units="cm")
+```
+
+We find that over the interval estimate of $\sigma$, there is very little difference in value between the fixed design (chosen to minimase maximum regret) and the locally optimal design. This implies that there is little value is re-estimating the sample size based on an interim estimate of $\sigma$, since even in the extreme case of learning it exactly we have very little to gain.
+
+## Evaluation
+
+The shape of the max regret by n function is not really interesting here. What we want to know is how the other options for choosing n compare against the optimal choice. So, a table would be better. This might remove the need for the heat plot, too - if our tables considered different point estimates and interval widths, and tells us for each what the sample size and associated max regrets are. Can put heat maps into appendix for interest.
+
+```{r}
+
+get_ns <- function(x, v_i, lambdas, cs) {
+  #print(x)
+  sig <- x[1]; k <- x[2]
+  # For a scenario defined by the point and interval estimate and value
+  # function index
+  lo <- sqrt(k*sig^2/qchisq(0.975, k)) 
+  up <- sqrt(k*sig^2/qchisq(0.025, k)) 
+  
+  lambda <- lambdas[v_i]
+  c <- cs[v_i]
+  
+  df <- expand.grid(sig = c(seq(lo, up, 0.001), up, sig),
+                    n = 2:600)
+  if(v_i < 3){
+    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = c)
+  } else {
+    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = c)
+  }
+  
+  df_wide <- reshape(df, idvar = "sig", direction = "wide", timevar = "n", v.names = "v")
+  
+  # Add a n=0 option
+  df_wide <- cbind(df_wide[,1, drop=FALSE], rep(0, nrow(df_wide)), df_wide[, 2:ncol(df_wide)])
+  
+  # Get maximum value at each sigma over set of ns
+  v_opt <- apply(df_wide[,2:ncol(df_wide)], 1, max)
+  
+  # Transform value into regret
+  df_wide_reg <- df_wide
+  df_wide_reg[, 2:ncol(df_wide_reg)] <- v_opt -  df_wide_reg[, 2:ncol(df_wide_reg)]
+  
+  # Get max regret for each n
+  max_reg <- apply(df_wide_reg[, 2:ncol(df_wide_reg)], 2, max)
+  
+  # Find the various fixed n solutions to highlight on the plot
+  # First, the MM regret:
+  n_mm <- which.min(apply(df_wide_reg[, 2:ncol(df_wide_reg)], 2, max))
+  # The simple solution maximising value at the point estimate sig:
+  n_s <- which.max(df_wide[df_wide$sig == sig, 2:ncol(df_wide)])
+
+  # For the upper CI and NCT methods, find the effect size which we
+  # would pretend to be looking for with 80% power such that it gives
+  # the right suggested sample size for the estimated sig
+  eff <- power.t.test(n = n_s, power = 0.8, sd = sig)$delta
+
+  # The Browne upper interval solution:
+  n_ci <- off_n(up, eff, pow = 0.8)
+
+  # The non-central t method of Julious. Note that 
+  ns2 <- 3:1000
+  z <- (2*qt(0.8, k, qt(0.975, 2*ns2 - 2))^2)*(sig^2)/(eff^2)
+  n_nct <- ns2[ns2 >= z][1]
+
+  df2 <- data.frame(n = 1:600,
+                    max_reg = max_reg)
+  
+  df3 <- rbind(df2[df2$n == n_mm,],
+               df2[df2$n == n_s,],
+               df2[df2$n == n_ci,],
+               df2[df2$n == n_nct,])
+  
+  df3$t <- c("Minimax regret", "Simple", "Upper CI", "Non-central t")
+  
+  return(c(df3$n, df3$max_reg))
+}
+
+lambdas <- c(lambda1, lambda2)
+cs <- c(c1, c2)
+
+# For example,
+get_ns(c(1, 50), v_i = 1, lambdas, cs)
+```
+
+Find designs for a range of point estimates and interval widths. Note we have hard coded the function to work in the ranges here, specifically by having a maximum $n = 1300$ which allows for the extreme case of a point estimate 1.5 and 10 degrees of freedom. Note also that don't include the NCT method in our comparison. As implemented, it aims to have 80 or 60% power in all scenarios, whereas a better comparison would allow the power to change with the estimated SD to mirror practice where we change the MCID. But if we do this it becomes very similar to the LO method, which is simpler and already compares well against the optimal approach. So leave the NCT approach for the discussion, where we could note it might improve over LO since it was designed to help deal with uncertainty, but that the potential improvement is very limited and in some cases unlikely since we know it will generally inflate n.
+
+
+```{r}
+df <- expand.grid(k = c(10, 50, 100, 200),
+                  sig = c(0.6, 0.8, 1, 1.25, 1.5))
+
+df <- df[,c(2,1)]
+
+r <- as.data.frame(t(apply(df, 1, get_ns, lambdas = lambdas, cs = cs, v_i = 1)))
+
+names(r) <- c("n_mm", "n_s", "n_ci", "n_nct", "r_mm", "r_s", "r_ci", "r_nct")
+
+df <- cbind(df, r)
+
+df$sig <- factor(df$sig)
+df$k <- factor(df$k)
+
+tab <- cbind(df[,1:2],
+             paste0(df[,3], " (", sprintf('%.3f', df[,7]) , ")"),
+             paste0(df[,4], " (", sprintf('%.3f', df[,8]) , ")"),
+             paste0(df[,5], " (", sprintf('%.3f', df[,9]) , ")"),
+             paste0(df[,6], " (", sprintf('%.3f', df[,10]) , ")"))
+
+colnames(tab) <- c("$\\sigma$", "$k$", "MM-R", "LO", "U-CI", "NCT")
+
+tab
+
+tbl <- xtable(tab)
+align(tbl) <- c(rep("l", 3), rep("r", 4))
+
+print(tbl, booktabs = T, include.rownames = F,
+      sanitize.text.function = function(x) {x}, floating = F,
+      file = "./tables/eval2.txt")
+
+#print(xtable(tab, digits = c(1,0,0,0,2,3,3,3,5)), booktabs = T, include.rownames = F, 
+#      sanitize.text.function = function(x) {x}, floating = F,
+#      file = "./paper/tables/ill.txt")
+```
+
+
+Implementations: 
+
+
+```{r, eval = FALSE}
+obj_f <- function(sig, n) {
+  ns <- 2:500
+  v_opt <- max(v1(n = ns, sig = sig, lambda1 = lambda, c1 = c))
+  -(v_opt - v1(n = n, sig = sig, lambda1 = lambda, c1 = c))
+}
+
+n <- 1
+done <- FALSE
+last <- 10000
+while(!done){
+  n <- n + 1
+  current <- -optim(1, obj_f, n=n, method = "Brent", lower = 0.8733963, upper=2.193667)$value
+  done <- current > last
+  last <- current
+}
+
+```
+
+In optimisation over sigma struggles, maybe due to boundary solutions. Look at some examples from the grid search, and the objective functions do have a maximum at a boundary and a local maximum within the range too. So the brute force method is maybe the way to go.
+
+### Simulation
+
+We know that standard SSR is not a good comparator, since it is grounded in the power threshold assumption. But we might want to do SSR under the MMR framework, where we get a new interval estimate at the interim and then re-calculate the sample size to minimise maximum regret with respect to this interval. We can compare this against the fixed sample size approach in a simulation study. We take our running example, with a fixed value function and initial point and interval estimate. We then vary the true SD, and for each value simulate some interim data, re-calculate, and record the true regret.
+
+```{r}
+lambda <- lambdas[1]
+c <- cs[1]
+
+true_regret <- function(sig, n, lambda, c){
+  
+  df <- expand.grid(sig = sig,
+                    n = 2:600)
+  
+  df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = c)
+  
+  v_opt <- max(df$v)
+  
+  reg <- v_opt - v1(n = n, sig = sig, lambda1 = lambda, c1 = c)
+
+  return(reg)
+}
+
+n_mmr <- get_ns(c(1, 50), v_i = 1, lambdas, cs)[1]
+
+sig <- 1; k <- 50
+lo <- sqrt(k*sig^2/qchisq(0.9995, k)) 
+up <- sqrt(k*sig^2/qchisq(0.0005, k)) 
+
+sigs <- seq(lo, up, 0.02)
+
+sigs <- seq(0.7, 1.5, 0.02)
+
+regs <- sapply(sigs, true_regret, n = n_mmr, lambda = lambda, c = c)
+
+plot(sigs, regs)
+
+res <- NULL
+for(true_sig in sigs){
+  print(true_sig)
+  for(i in 1:50){
+    int_n <- floor(n_mmr/2)
+    int_sig <- sqrt(rchisq(1, int_n - 2)*true_sig^2/(int_n - 2))
+    
+    n_mmr_ssr <- get_ns(c(int_sig, int_n - 1), v_i = 1, lambdas, cs)[1]
+    reg <- true_regret(true_sig, n_mmr_ssr, lambda, c)
+    res <- rbind(res, c(true_sig, n_mmr_ssr, reg))
+  }
+}
+```
+
+## Extension
+
+First, illustrate the different tangents and solutions on the power curve.
+
+```{r}
+lambda <- lambda1[1]
+C <- c1[1]
+
+df <- data.frame(n=seq(4,500,1))
+df$sig <- 1
+df$v1 <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
+
+df$p <- df$v1 + lambda*df$n + C
+
+gamma_est <- 25
+gamma <- 10
+# Change overall lambda based on recruitment rate
+lambda_rel <- 20 # relative weight of time (in months) versus n
+lambda_1 <- gamma_est*lambda/(gamma_est + lambda_rel)
+lambda_new <- lambda_1 + lambda_rel*lambda_1/gamma
+
+df$v2 <- v1(n = df$n, sig = df$sig, lambda1 = lambda_new, c1 = C)
+
+opt1 <- df[which.max(df$v1),]
+opt1$gamma <- 25
+opt2 <- df[which.max(df$v2),]
+opt2$gamma <- 10
+
+
+ggplot(df, aes(n, p)) + geom_line() +
+  geom_abline(intercept = C + opt1$v1, slope = lambda, linetype = 2, colour = cols[1]) +
+  geom_abline(intercept = C + opt2$v2, slope = lambda_new, linetype = 2, colour = cols[2]) +
+  geom_point(data = rbind(opt1, opt2), aes(colour = as.factor(gamma))) +
+  scale_colour_manual(name = expression(gamma), values = cols[c(2,1)]) + 
+  xlab("Sample size") + ylab("Power") +
+  theme_minimal()
+
+#ggsave("./figures/recruit1.pdf", width = 14, height = 9, units="cm")
+```
+
+
+```{r}
+# First, choose a point estimate and construct a 95% CI around it
+# Gamma = exp. number recruited in total over a month
+gamma_est <- 25; 
+# For an estimated gamma, lower and upper CI limits are
+lo <- qchisq(0.025, 2*gamma_est)/2
+up <- qchisq(1 - 0.025, 2*gamma_est + 2)/2
+sig <- 1
+
+i <- 1
+lambda <- lambda1[1]
+C <- c1[1]
+
+df <- expand.grid(gamma = c(seq(lo-5, up+5, length.out = 50), gamma_est),
+                    n = 2:500)
+  df$gamma <- 1/df$gamma
+  
+  # Change overall lambda based on recruitment rate
+  lambda_rel <- 10 # relative weight of time (in months) versus n
+  lambda_1 <- lambda/(1 + lambda_rel/gamma_est)
+  lambda_2 <- lambda_1*lambda_rel
+  lambda <- lambda_1 + lambda_2*df$gamma
+  
+  if(i < 3){
+    df$v <- v1(n = df$n, sig = sig, lambda1 = lambda, c1 = C)
+  } else {
+    df$v <- v2(n = df$n, sig = sig, lambda2 = lambda, c2 = C)
+  }
+  
+  df_wide <- reshape(df, idvar = "gamma", direction = "wide", timevar = "n", v.names = "v")
+  
+  # Get maximum value at each gamma over set of ns
+  v_opt <- apply(df_wide[,2:ncol(df_wide)], 1, max)
+  
+  # Transform value into regret
+  df_wide_reg <- df_wide
+  df_wide_reg[, 2:ncol(df_wide_reg)] <- v_opt -  df_wide_reg[, 2:ncol(df_wide_reg)]
+  
+  # Get minimax regret n index
+  n_mm_ind <- which.min(apply(df_wide_reg[1/df_wide_reg$gamma > lo & 1/df_wide_reg$gamma < up, 2:ncol(df_wide_reg)], 2, max))
+  
+  # Get minimax regret n  value at each sigma
+  v_mm <- df_wide[, 1 + n_mm_ind]
+  
+  # Get n using point estimate gamma
+  n_s_ind <- which.max(df_wide[df_wide$gamma == 1/gamma_est, 2:ncol(df_wide)])
+  
+  # Get simple n value at each gamma
+  v_s <- df_wide[, 1 + n_s_ind]
+  
+  df3 <- data.frame(gamma = rep(df_wide$gamma, 2),
+                    v = c(v_opt, v_mm),
+                    t = c(rep(c("Optimal", "Simple"), each = length(df_wide$gamma))))
+  
+
+  
+  ggplot(df3, aes(1/gamma, v, colour = t)) + geom_line() +
+    scale_colour_manual(name = "", values = cols) +
+    geom_vline(xintercept = c(lo, up), linetype = 2) +
+    ylab("Value") + xlab("Recruitment") +
+    theme_minimal()
+  
+#ggsave("./figures/recruit2.pdf", width = 14, height = 9, units="cm")
+```
+
+Can we combine these, sigma and recruitment rate, to do a 2d MM-R approach? Might we find that in extreme cases (e.g. high sigma and low recruitment rate) the MM-R design becomes very sub-optimal and it's worth doing SSR, since we are learning about two things at the price of one interim analysis?
+
+## Figures
+
+```{r}
+#ggsave("./figures/ocs.pdf", height=9, width=11, units="cm")
+#ggsave("./figures/corr.eps", height=9, width=14, units="cm", device = cairo_ps())
+#ggsave("./figures/eval_np30.eps", height=16, width=18, units="cm", device = cairo_ps())
+```
+
+
