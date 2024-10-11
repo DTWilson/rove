@@ -6,6 +6,16 @@ format: html
 
 ## Robust, value-based sample size determination for clinical trials when nuisance parameters are unknown
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(reshape2)
+require(xtable)
+require(ggplot2)
+require(viridis)
+require(patchwork)
+require(RColorBrewer)
+cols <- c("#ffba49", "#20a39e", "#ef5b5b", "#a4a9ad", "#23001e")
+```
 
 ## Problem
 
@@ -13,88 +23,80 @@ Consider a two-arm trial with a normal endpoint which will compare the means in 
 
 ## Methods
 
-Our basic proposal is to define a function which quantifies the benefit of a given choice of $n$ and offsets this against the costs of sampling and setup. We'll refer to this as a _value function_, to be distinguished from a utility function in that it can only be applied when all the inputs are known (i.e. it reflects preferences under certainty). We propose two value functions:
+Our basic proposal is to define a function which quantifies the benefit of a given choice of $n$ and offsets this against the costs of sampling and setup. We'll refer to this as a _value function_, to be distinguished from a utility function in that it can only be applied when all the inputs are known (i.e. it reflects preferences under certainty). The generic form of the function will be
 
 $$
-\begin{align}
-v_1(n, \sigma; \lambda_1, c_1) & = \underbrace{1 - \Phi\left(z_{1 - \alpha} - \frac{\delta_a}{\sqrt{2\sigma^2/n}}\right)}_\textrm{Power} - \lambda_1 n - c_1 \\
-v_2(n, \sigma; \lambda_2, c_2) & = \underbrace{\sqrt{\frac{n}{2\sigma^2}}}_\textrm{Precision} - \lambda_2 n - c_2.
-\end{align}
+v(n, \sigma; \lambda, c)  = \{benefit\}- \lambda n - c,
 $$
 
-Each value function has a benefit component (the power of the trial and the sampling precision of the estimated mean difference, respectively) offset by a cost component (a multiple of the sample size and a fixed setup cost in each case). These value functions imply a constant trade-off between the sample size of the trial and its power/precision, with the rate given by the parameters $\lambda_1$ and $\lambda_2$. They also include fixed set-up costs, $c_1$ and $c_2$. Note that we distinguish the arguments between those which reflect the model (in this case, $n$ and $\sigma$) and those which are parameters of the value function ($\lambda$ and $c$).
+where $\lambda$ represents the (assumed linear) cost of sampling, and $c$ the setup costs. For the benefit of a trial, we could consider using the precision of the estimated treatment effect. This would reflect the diminishing returns, in terms of information gained, that we see when we increase the sample size. But, if we use this metric then we are implying that the value of the trial will increase linearly with precision; e.g., a movement from 1 to 2 has the same gain as a movement from 101 to 102. This does not reflect our perceptions of benefit; we really want enough precision to be able to reliably answer our question, but then beyond that there is less and less value in further increases. 
+
+This intuitive idea is formalised by the use of _power_ as a measure of benefit, which will plateau sooner than precision and indeed is bounded. Power is defined with respect to the nuisance parameter $\sigma$ (as is precision), but also the target difference. We argue that the choice of target difference is really a choice of the benefit part of our value function; it tells us how much precision is enough, by thinking about the MCID. Note that we want this to be invariant to the nuisance parameter, i.e. that we would choose the same target difference, and hence function, regardless of the true SD value. OR equivalently, if the SD changes then we know exactly how our benefit function will change. This is all for the discussion.
+
+Using power at the target $\delta_a$ for benefit, we then have the value function
+
+$$
+v(n, \sigma; \lambda, c) = \underbrace{1 - \Phi\left(z_{1 - \alpha} - \frac{\delta_a}{\sqrt{2\sigma^2/n}}\right)}_\textrm{Power} - \lambda n - c.
+$$
+
+This value function implies a constant trade-off between the sample size of the trial and its power, with the rate given by the parameter $\lambda$. It also include fixed set-up costs, $c$. Note that we distinguish the arguments between those which reflect the model (in this case, $n$ and $\sigma$) and those which are parameters of the value function ($\lambda$ and $c$).
 
 ## Illustration
 
-Consider the case where the MCID is  $\delta_a = 0.3$ and we fix the (one-sided) type I error rate at $\alpha = 0.025$. We suppose we have a point estimate of $\sigma = 1$ which was derived from some pilot trial data with 30 patients in each arm. Hard-coding these into the value functions gives
+Consider the case where the MCID is  $\delta_a = 0.3$ and we fix the (one-sided) type I error rate at $\alpha = 0.025$. We suppose we have a point estimate of $\sigma = 1$ which was derived from some pilot trial data with 30 patients in each arm. Hard-coding these into the value function gives
 
 ```{r}
-v1 <- function(n, sig, lambda1, c1) {
+v <- function(n, sig, lambda, c) {
   # Power based value function
-  1-pt(qt(0.975, 2*(n-1)), 2*(n-1), 0.3/sqrt(2*sig^2/n)) - lambda1*n - c1
-}
-
-v2 <- function(n, sig, lambda2, c2) {
-  # Precision based value function
-  sqrt(n/(2*sig^2)) - lambda2*n - c2
+  1-pt(qt(0.975, 2*(n-1)), 2*(n-1), 0.3/sqrt(2*sig^2/n)) - lambda*n - c
 }
 ```
 
-We choose two values for each of $\lambda_1$ and $\lambda_2$, representing sampling costs. These are chosen to give, for their respective value functions, locally optimal sample sizes of 176 and 110 when $\sigma = 1$ (representing powers of 0.8 and 0.6 respectively). We then choose the setup cost parameters $c_1$ and $c_2$ to be equivalent to sampling 15 participants (per arm).
+We choose two values for $\lambda$, representing sampling costs. These are chosen to give locally optimal sample sizes of 176 and 110 when $\sigma = 1$ (representing powers of 0.8 and 0.6 respectively). We then choose the setup cost parameter $c$ to be equivalent to sampling 15 participants (per arm).
 
 ```{r}
 # Define some example trade-offs
-lambda1 <- c(0.00224, 0.00392); lambda2 <- c(0.02668, 0.0337)
+lambdas <- c(0.00224, 0.00392)
 
 # Take a common fixed cost in units of sample size
 n_cost <- 15
-c1 <- lambda1*n_cost; c2 <- lambda2*n_cost
+cs <- lambda*n_cost
 ```
 
-To illustrate these scenarios, we plot power and precision functions for $\sigma = 1$ and $\sigma = 1.3$ along with the value function contours, and highlight the locally optimal sample size in each case and the interval method sample size.
+To illustrate these scenarios, we plot power and precision functions for $\sigma = 1$ and $\sigma = 1.3$ along with the value function contours, and highlight the locally optimal sample size in each case.
 
 ```{r}
 plots <- vector("list", 4)
-for(i in 1:4){
-  lambda <- c(lambda1, lambda2)[i]
-  C <- c(c1, c2)[i]
+for(i in 1:2){
   
   df <- data.frame(n=seq(4,500,1))
   df <- rbind(df, df)
   df$sig <- c(rep(1, nrow(df)/2), rep(1.3*1, nrow(df)/2))
-  if(i < 3){
-    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
-  } else {
-    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = C)
-  }
-  df$p <- df$v + lambda*df$n + C
+
+  df$v <- v(n = df$n, sig = df$sig, lambda = lambdas[i], c = cs[i])
+
+  df$p <- df$v + lambdas[i]*df$n + cs[i]
   
   opt1 <- df[which.max(df$v*(df$sig == 1)),]
   opt2 <- df[which.max(df$v*(df$sig == 1.3)),]
   
   gr <- expand.grid(n = seq(4, 500, l = 10),
                     p = seq(min(df$p), max(df$p), l = 10))
-  gr$v <- gr$p - lambda*gr$n - C
+  gr$v <- gr$p - lambdas[i]*gr$n - cs[i]
   
   plots[[i]] <- ggplot(df, aes(n, p)) + geom_line(aes(colour=as.factor(sig))) +
-    #geom_hline(yintercept = 0.8, linetype=2) +
-    geom_contour(data = gr, aes(z = v), alpha = 0.5, colour = cols[3]) +
-    geom_contour(data = gr, aes(z = v), breaks = c(C), colour = cols[4]) +
+    geom_contour(data = gr, aes(z = v), alpha = 0.3, colour = cols[3]) +
+    geom_contour(data = gr, aes(z = v), breaks = c(cs[i]), colour = cols[4]) +
     geom_point(data = df[as.numeric(row.names(rbind(opt1, opt2))), ]) +
     xlab("Sample size") +
     scale_colour_manual(values=cols[1:2], labels=round(c(1, 1.3), 2)) +
     labs(colour = "SD") +
+    ylab("Power") +
     theme_minimal()
-  
-  if(i < 3){
-    plots[[i]] <- plots[[i]] + ylab("Power")
-  } else {
-    plots[[i]] <- plots[[i]] + ylab("Precision")
-  }
 }
 
 
-p1 <- (plots[[1]] + plots[[3]]) /(plots[[2]] + plots[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p1 <- plots[[1]] + plots[[2]] + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
 p1
 
 #ggsave("./figures/example_1_app.pdf", width = 18, height = 14, units="cm")
@@ -109,11 +111,9 @@ To further explore the relationship between SD and sample size we can plot the l
 ```{r}
 mm_reg_n <- function(sig, lambda, c, i) {
   n <- seq(4,900,1)
-  if(i < 3){
-    v <- v1(n = n, sig = sig, lambda1 = lambda, c1 = c)
-  } else {
-    v <- v2(n = n, sig = sig, lambda2 = lambda, c2 = c)
-  }
+
+  v <- v(n = n, sig = sig, lambda = lambda, c = c)
+
   if(max(v) > 0) {
     n[which.max(v)]
   } else {
@@ -127,15 +127,14 @@ off_n <- function(sig, eff = 0.3, pow) {
   n[p >= pow][1]
 }
 
-plots <- vector("list", 4)
-for(i in 1:4){
-  lambda <- c(lambda1, lambda2)[i]
-  c <- c(c1, c2)[i]
+plots <- vector("list", 2)
+for(i in 1:2){
+
   pow_nom <- 0.8*(i == 1 | i == 3) + 0.6*(i == 2 | i == 4)
   
   df <- data.frame(sig = seq(0.5, 2, 0.01))
   
-  df$n_opt <- sapply(df$sig, mm_reg_n, lambda=lambda, c=c, i=i)
+  df$n_opt <- sapply(df$sig, mm_reg_n, lambda=lambdas[i], c=cs[i], i=i)
   df$n_off <- sapply(df$sig, off_n, pow = pow_nom)
   
   df <- melt(df, id.vars = "sig")
@@ -148,7 +147,7 @@ for(i in 1:4){
 }
 
 
-p2 <- (plots[[1]] + plots[[3]]) /(plots[[2]] + plots[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p2 <- plots[[1]] + plots[[2]] + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
 p2
 
 #ggsave("./figures/example_2_app.pdf", width = 18, height = 14, units="cm")
@@ -167,19 +166,14 @@ sig <- 1; k <- 2*30 - 2
 lo <- sqrt(k*sig^2/qchisq(0.975, k)) 
 up <- sqrt(k*sig^2/qchisq(0.025, k)) 
 
-plots2 <- vector("list", 4)
-for(i in 1:4){
-  lambda <- c(lambda1, lambda2)[i]
-  C <- c(c1, c2)[i]
+plots2 <- vector("list", 2)
+for(i in 1:2){
   
   df <- expand.grid(sig = seq(0.6, 1.5, 0.01),
                     n = 2:500)
-  if(i < 3){
-    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
-  } else {
-    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = C)
-  }
-  
+
+  df$v <- v(n = df$n, sig = df$sig, lambda = lambdas[i], c = cs[i])
+
   df_wide <- reshape(df, idvar = "sig", direction = "wide", timevar = "n", v.names = "v")
   
   # Add a n=0 option
@@ -204,13 +198,13 @@ for(i in 1:4){
                     t = c(rep(c("Optimal", "Minimax"), each = length(df_wide$sig))))
   
   plots2[[i]] <- ggplot(df, aes(sig, v, colour = t)) + geom_line() +
-    scale_colour_manual(name = "", values = cols[c(1,3)]) +
+    scale_colour_manual(name = "", values = cols[1:2]) +
     geom_vline(xintercept = c(lo, up), linetype = 2) +
     ylab("Value") + xlab("Standard deviation") +
     theme_minimal()
 }
   
-p2 <- (plots2[[1]] + plots2[[3]]) /(plots2[[2]] + plots2[[4]]) + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
+p2 <- plots2[[1]] + plots2[[2]] + plot_layout(guides = "collect") & theme(legend.position = 'bottom')
 p2
 #ggsave("./figures/example_3_app.pdf", p2, width = 18, height = 12, units="cm")
 
@@ -239,11 +233,8 @@ get_ns <- function(x, v_i, lambdas, cs) {
   
   df <- expand.grid(sig = c(seq(lo, up, 0.001), up, sig),
                     n = 2:600)
-  if(v_i < 3){
-    df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = c)
-  } else {
-    df$v <- v2(n = df$n, sig = df$sig, lambda2 = lambda, c2 = c)
-  }
+
+  df$v <- v(n = df$n, sig = df$sig, lambda = lambda, c = c)
   
   df_wide <- reshape(df, idvar = "sig", direction = "wide", timevar = "n", v.names = "v")
   
@@ -291,9 +282,6 @@ get_ns <- function(x, v_i, lambdas, cs) {
   
   return(c(df3$n, df3$max_reg))
 }
-
-lambdas <- c(lambda1, lambda2)
-cs <- c(c1, c2)
 
 # For example,
 get_ns(c(1, 50), v_i = 1, lambdas, cs)
@@ -377,11 +365,11 @@ true_regret <- function(sig, n, lambda, c){
   df <- expand.grid(sig = sig,
                     n = 2:600)
   
-  df$v <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = c)
+  df$v <- v(n = df$n, sig = df$sig, lambda = lambda, c = c)
   
   v_opt <- max(df$v)
   
-  reg <- v_opt - v1(n = n, sig = sig, lambda1 = lambda, c1 = c)
+  reg <- v_opt - v(n = n, sig = sig, lambda = lambda, c = c)
 
   return(reg)
 }
@@ -419,12 +407,12 @@ for(true_sig in sigs){
 First, illustrate the different tangents and solutions on the power curve.
 
 ```{r}
-lambda <- lambda1[1]
-C <- c1[1]
+lambda <- lambdas[1]
+C <- cs[1]
 
 df <- data.frame(n=seq(4,500,1))
 df$sig <- 1
-df$v1 <- v1(n = df$n, sig = df$sig, lambda1 = lambda, c1 = C)
+df$v1 <- v(n = df$n, sig = df$sig, lambda = lambda, c = C)
 
 df$p <- df$v1 + lambda*df$n + C
 
@@ -435,7 +423,7 @@ lambda_rel <- 20 # relative weight of time (in months) versus n
 lambda_1 <- gamma_est*lambda/(gamma_est + lambda_rel)
 lambda_new <- lambda_1 + lambda_rel*lambda_1/gamma
 
-df$v2 <- v1(n = df$n, sig = df$sig, lambda1 = lambda_new, c1 = C)
+df$v2 <- v(n = df$n, sig = df$sig, lambda = lambda_new, c = C)
 
 opt1 <- df[which.max(df$v1),]
 opt1$gamma <- 25
@@ -465,8 +453,8 @@ up <- qchisq(1 - 0.025, 2*gamma_est + 2)/2
 sig <- 1
 
 i <- 1
-lambda <- lambda1[1]
-C <- c1[1]
+lambda <- lambdas[1]
+C <- cs[1]
 
 df <- expand.grid(gamma = c(seq(lo-5, up+5, length.out = 50), gamma_est),
                     n = 2:500)
@@ -478,11 +466,8 @@ df <- expand.grid(gamma = c(seq(lo-5, up+5, length.out = 50), gamma_est),
   lambda_2 <- lambda_1*lambda_rel
   lambda <- lambda_1 + lambda_2*df$gamma
   
-  if(i < 3){
-    df$v <- v1(n = df$n, sig = sig, lambda1 = lambda, c1 = C)
-  } else {
-    df$v <- v2(n = df$n, sig = sig, lambda2 = lambda, c2 = C)
-  }
+
+  df$v <- v(n = df$n, sig = sig, lambda = lambda, c = C)
   
   df_wide <- reshape(df, idvar = "gamma", direction = "wide", timevar = "n", v.names = "v")
   
